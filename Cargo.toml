@@ -1,0 +1,23 @@
+[package]
+name = "claude-sandbox"
+version = "0.1.0"
+edition = "2021"
+description = "Run Claude Code in an isolated Docker container"
+authors = ["Elli"]
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive", "env"] }
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+anyhow = "1.0"
+dirs = "5.0"
+colored = "2.1"
+which = "6.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

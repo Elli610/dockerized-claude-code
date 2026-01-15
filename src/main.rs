@@ -124,6 +124,20 @@ struct ContainerState {
     running: bool,
 }
 
+struct RunConfig {
+    folders: Vec<PathBuf>,
+    prompt: Option<String>,
+    prompt_file: Option<PathBuf>,
+    name: String,
+    memory: Option<String>,
+    cpus: Option<String>,
+    discord_webhook: Option<String>,
+    env_vars: Vec<String>,
+    dangerously_skip_permissions: bool,
+    continue_session: bool,
+    resume: Option<String>,
+}
+
 fn get_config_dir() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("CLAUDE_SANDBOX_CONFIG") {
         return Ok(PathBuf::from(p));
@@ -400,19 +414,7 @@ fn print_banner(name: &str) {
     println!("{}\n", "═".repeat(70).cyan());
 }
 
-async fn run_claude(
-    folders: Vec<PathBuf>,
-    prompt: Option<String>,
-    prompt_file: Option<PathBuf>,
-    name: String,
-    memory: Option<String>,
-    cpus: Option<String>,
-    discord_webhook: Option<String>,
-    env_vars: Vec<String>,
-    dangerously_skip_permissions: bool,
-    continue_session: bool,
-    resume: Option<String>,
-) -> Result<()> {
+async fn run_claude(config: RunConfig) -> Result<()> {
     check_docker().await?;
 
     if !image_exists().await? {
@@ -420,13 +422,19 @@ async fn run_claude(
         build_image(false).await?;
     }
 
-    let need_new_container = if container_exists(&name).await? {
-        if container_running(&name).await? {
-            println!("{}", format!("Using existing container '{name}'").cyan());
+    let need_new_container = if container_exists(&config.name).await? {
+        if container_running(&config.name).await? {
+            println!(
+                "{}",
+                format!("Using existing container '{}'", config.name).cyan()
+            );
             false
         } else {
             // Remove stopped container
-            Command::new("docker").args(["rm", &name]).status().await?;
+            Command::new("docker")
+                .args(["rm", &config.name])
+                .status()
+                .await?;
             true
         }
     } else {
@@ -436,7 +444,7 @@ async fn run_claude(
     if need_new_container {
         println!("{}", "Starting Claude Code sandbox...".cyan());
         println!("{}:", "Mapped folders".bold());
-        for folder in &folders {
+        for folder in &config.folders {
             let abs = std::fs::canonicalize(folder)?;
             let fname = abs.file_name().unwrap().to_str().unwrap();
             println!(
@@ -447,49 +455,52 @@ async fn run_claude(
         }
 
         start_container(
-            &name,
-            &folders,
-            memory.as_deref(),
-            cpus.as_deref(),
-            &env_vars,
+            &config.name,
+            &config.folders,
+            config.memory.as_deref(),
+            config.cpus.as_deref(),
+            &config.env_vars,
         )
         .await?;
     }
 
-    let final_prompt = match (prompt, prompt_file) {
+    let final_prompt = match (config.prompt, config.prompt_file) {
         (Some(p), _) => Some(p),
         (None, Some(f)) => Some(std::fs::read_to_string(&f)?),
         (None, None) => None,
     };
 
-    print_banner(&name);
+    print_banner(&config.name);
 
-    if let Some(ref wh) = discord_webhook {
-        send_discord(wh, &format!("🚀 Claude sandbox '{name}' started"))
+    if let Some(ref wh) = config.discord_webhook {
+        send_discord(wh, &format!("🚀 Claude sandbox '{}' started", config.name))
             .await
             .ok();
     }
 
     exec_claude_interactive(
-        &name,
+        &config.name,
         final_prompt.as_deref(),
-        dangerously_skip_permissions,
-        continue_session,
-        resume.as_deref(),
+        config.dangerously_skip_permissions,
+        config.continue_session,
+        config.resume.as_deref(),
     )
     .await?;
 
     println!("\n{} Exited Claude session", "✓".green());
-    println!("  Container '{name}' is still running");
+    println!("  Container '{}' is still running", config.name);
     println!(
         "  Use {} to continue",
-        format!("claude-sandbox continue -n {name}").yellow()
+        format!("claude-sandbox continue -n {}", config.name).yellow()
     );
 
-    if let Some(ref wh) = discord_webhook {
-        send_discord(wh, &format!("👋 Detached from Claude sandbox '{name}'"))
-            .await
-            .ok();
+    if let Some(ref wh) = config.discord_webhook {
+        send_discord(
+            wh,
+            &format!("👋 Detached from Claude sandbox '{}'", config.name),
+        )
+        .await
+        .ok();
     }
 
     Ok(())
@@ -499,9 +510,7 @@ async fn continue_session(name: &str) -> Result<()> {
     check_docker().await?;
 
     if !container_running(name).await? {
-        bail!(
-            "Container '{name}' is not running. Use 'run' to start it."
-        );
+        bail!("Container '{name}' is not running. Use 'run' to start it.");
     }
 
     println!(
@@ -521,9 +530,7 @@ async fn resume_session(name: &str, session: Option<&str>) -> Result<()> {
     check_docker().await?;
 
     if !container_running(name).await? {
-        bail!(
-            "Container '{name}' is not running. Use 'run' to start it."
-        );
+        bail!("Container '{name}' is not running. Use 'run' to start it.");
     }
 
     if let Some(s) = session {
@@ -660,7 +667,7 @@ async fn main() -> Result<()> {
             continue_session,
             resume,
         } => {
-            run_claude(
+            run_claude(RunConfig {
                 folders,
                 prompt,
                 prompt_file,
@@ -668,11 +675,11 @@ async fn main() -> Result<()> {
                 memory,
                 cpus,
                 discord_webhook,
-                env,
+                env_vars: env,
                 dangerously_skip_permissions,
                 continue_session,
                 resume,
-            )
+            })
             .await
         }
         Commands::Continue { name } => continue_session(&name).await,

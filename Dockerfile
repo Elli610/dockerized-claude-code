@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     ca-certificates \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
@@ -16,7 +17,8 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN useradd -m -s /bin/bash -d /home/claude claude && \
     mkdir -p /home/claude/workspace /home/claude/.claude /home/claude/.config && \
     touch /home/claude/.claude.json /home/claude/.claude.json.backup && \
-    chown -R claude:claude /home/claude
+    chown -R claude:claude /home/claude && \
+    echo "claude ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 USER claude
 WORKDIR /home/claude/workspace

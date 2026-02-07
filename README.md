@@ -1,12 +1,13 @@
 # Claude Sandbox
 
-Run Claude Code in an isolated Docker container with full development environment.
+Run Claude Code in isolated Docker containers with full development environment. **Now supports multiple instances!**
 
 ## Features
 
-- **Isolated execution**: Claude only accesses folders you explicitly map
-- **Persistent memory**: Claude's state persists between sessions
-- **Background mode**: Run Claude tasks and get Discord notifications when done
+- **Multiple instances**: Run separate Claude sessions for different projects simultaneously
+- **Isolated execution**: Each container has its own Claude state and only accesses folders you explicitly map
+- **Auto-attach**: Running `run` on an existing folder automatically attaches to the running container
+- **Folder-based naming**: Containers are automatically named based on the folder(s) you open
 - **Full dev environment**: Rust, Node.js (via nvm), Foundry (Solidity)
 - **Cross-platform**: Works on macOS, Linux, and Windows
 
@@ -36,65 +37,85 @@ sudo cp target/release/claude-sandbox /usr/local/bin/
 ```bash
 # Add to ~/.bashrc, ~/.zshrc, or Windows environment
 export ANTHROPIC_API_KEY="your-key-here"
-
-# Optional: Discord webhook for notifications
-export CLAUDE_DISCORD_WEBHOOK="https://discord.com/api/webhooks/..."
 ```
 
 ## Usage
 
-### Basic usage
+### Start a new session
 
 ```bash
-# Run interactively with one folder
+# Run with one folder - creates container "claude-my-project"
 claude-sandbox run ./my-project
 
-# Run with multiple folders
-claude-sandbox run ./project ./shared-libs ./configs
+# Run with multiple folders - creates container "claude-my-project-shared-libs"
+claude-sandbox run ./my-project ./shared-libs
 
 # Run with an initial prompt
-claude-sandbox run ./project -p "Review the code and suggest improvements"
+claude-sandbox run ./project -m "Review the code and suggest improvements"
 
 # Run with a prompt from file
 claude-sandbox run ./project -f ./prompts/review.txt
 ```
 
-### Background execution
+### Continue an existing session
 
 ```bash
-# Start in background
-claude-sandbox run ./project -p "Refactor all files to use async/await" --background
+# Continue by folder path (recommended)
+claude-sandbox continue ./my-project
 
-# Check status
-claude-sandbox status
+# Continue by folder name
+claude-sandbox continue my-project
 
-# View logs
-claude-sandbox logs
-claude-sandbox logs --follow
+# Continue by container name
+claude-sandbox continue claude-my-project
 
-# Attach to running container
-claude-sandbox attach
+# Continue last used session
+claude-sandbox continue
+```
 
-# Open a shell to inspect/debug
-claude-sandbox shell
+### Multiple instances
 
-# Stop when needed
-claude-sandbox stop
+```bash
+# Terminal 1: Start working on project A
+claude-sandbox run ./project-a
+
+# Terminal 2: Start working on project B (separate container)
+claude-sandbox run ./project-b
+
+# Each project has its own:
+# - Container (claude-project-a, claude-project-b)
+# - Claude state/memory
+# - Conversation history
+```
+
+### Named sessions
+
+```bash
+# Create a named session for easy resumption
+claude-sandbox run ./project -n feature-branch
+
+# Resume by name later
+claude-sandbox continue ./project -n feature-branch
 ```
 
 ### Container management
 
 ```bash
-# List all Claude containers
+# List all Claude containers and their folder mappings
 claude-sandbox list
 
-# Use a custom container name
-claude-sandbox run ./project -n my-task --background
+# Open shell in a container
+claude-sandbox shell ./my-project
+claude-sandbox shell                    # uses last session
 
-# Check specific container
-claude-sandbox status -n my-task
-claude-sandbox logs -n my-task
-claude-sandbox attach -n my-task
+# Check status
+claude-sandbox status ./my-project
+
+# Stop a specific container
+claude-sandbox stop ./my-project
+
+# Stop all Claude containers
+claude-sandbox stop all
 ```
 
 ### Resource limits
@@ -104,19 +125,12 @@ claude-sandbox attach -n my-task
 claude-sandbox run ./project --memory 4g --cpus 2
 ```
 
-### Discord notifications
+### Port mapping
 
 ```bash
-# Set webhook globally
-export CLAUDE_DISCORD_WEBHOOK="https://discord.com/api/webhooks/..."
-
-# Or per-run
-claude-sandbox run ./project --background --discord-webhook "https://..."
+# Expose ports for web development
+claude-sandbox run ./web-app -p 3000 -p 8080:8080
 ```
-
-You'll receive notifications when:
-- Claude sandbox starts
-- Claude sandbox finishes
 
 ### Other commands
 
@@ -125,38 +139,73 @@ You'll receive notifications when:
 claude-sandbox build
 claude-sandbox build --no-cache
 
-# Reset all Claude state/memory
+# Reset all Claude state/memory (all containers)
 claude-sandbox reset
+
+# Resume specific conversation by ID
+claude-sandbox resume <conversation-id> -t ./my-project
 ```
 
 ## Full CLI Reference
 
 ```
 claude-sandbox run <FOLDERS>...
-    -p, --prompt <PROMPT>           Initial prompt
+    -m, --prompt <PROMPT>           Initial prompt
     -f, --prompt-file <FILE>        File containing initial prompt
-    -b, --background                Run in background (detached)
-    -n, --name <NAME>               Container name [default: claude]
-    -m, --memory <MEMORY>           Memory limit (e.g., "4g")
+    -n, --name <NAME>               Named session (for easy resumption)
+        --container <NAME>          Override auto-generated container name
+        --memory <MEMORY>           Memory limit (e.g., "4g")
         --cpus <CPUS>               CPU limit (e.g., "2")
-        --discord-webhook <URL>     Discord webhook for notifications
+    -p, --port <PORT>               Expose ports (can specify multiple)
     -e, --env <KEY=VALUE>           Additional environment variables
         --dangerously-skip-permissions  Skip Claude permission prompts
+    -c, --continue-session          Continue most recent conversation
+    -r, --resume <ID>               Resume specific conversation by ID
 
-claude-sandbox attach [-n <NAME>]   Attach to running container
-claude-sandbox shell [-n <NAME>]    Open bash shell in container
-claude-sandbox logs [-n <NAME>]     View container logs
-    -f, --follow                    Follow log output
-    -t, --tail <LINES>              Lines to show [default: 100]
+claude-sandbox continue [TARGET]
+    TARGET                          Folder path or container name
+    -n, --name <NAME>               Resume named session
 
-claude-sandbox stop [-n <NAME>]     Stop a running container
-claude-sandbox list                 List all Claude containers
-claude-sandbox status [-n <NAME>]   Show container status
+claude-sandbox resume [CONVERSATION_ID]
+    -t, --target <TARGET>           Folder path or container name
+
+claude-sandbox shell [TARGET]       Open bash shell in container
+claude-sandbox stop [TARGET]        Stop a container (or "all")
+claude-sandbox status [TARGET]      Show container status
+claude-sandbox list                 List all containers with folder mappings
+
 claude-sandbox build                Build Docker image
     --no-cache                      Force rebuild without cache
 claude-sandbox reset                Reset Claude's persistent state
     -f, --force                     Skip confirmation
+
+claude-sandbox completions <SHELL>  Generate shell completions (bash/zsh/fish)
 ```
+
+## Container Naming
+
+Containers are automatically named based on the folders you open:
+
+| Command | Container Name |
+|---------|---------------|
+| `run ./my-project` | `claude-my-project` |
+| `run ./project ./lib` | `claude-project-lib` |
+| `run ./My-Project` | `claude-my-project` (lowercased) |
+| `run ./project --container custom` | `custom` (override) |
+
+## State Management
+
+Claude Sandbox uses a hybrid approach for state:
+
+**Shared globally** (in `~/.claude-sandbox/`):
+- `.claude/` - Auth, credentials, and Claude settings
+- `.claude.json` - Claude's settings (theme, preferences)
+- `.config/` - Application configuration
+
+**Isolated per-container** (in `~/.claude-sandbox/containers/<name>/`):
+- `conversations/` - Project-specific conversation history
+
+This means your API key, theme, and settings are shared across all containers, but each project has its own separate conversation history.
 
 ## Installed Tools in Container
 
@@ -173,5 +222,23 @@ claude-sandbox reset                Reset Claude's persistent state
 | Environment Variable | Description |
 |---------------------|-------------|
 | `ANTHROPIC_API_KEY` | Required. Your Anthropic API key |
-| `CLAUDE_DISCORD_WEBHOOK` | Optional. Discord webhook URL |
 | `CLAUDE_SANDBOX_CONFIG` | Optional. Custom config directory (default: `~/.claude-sandbox`) |
+
+## Data Storage
+
+```
+~/.claude-sandbox/
+├── .claude/                  # Global Claude state (auth, settings) - SHARED
+├── .claude.json              # Global settings (theme, preferences) - SHARED
+├── .claude.json.backup       # Settings backup - SHARED
+├── .config/                  # App configuration - SHARED
+├── containers/
+│   ├── claude-project-a/
+│   │   └── conversations/    # Project conversations - ISOLATED
+│   └── claude-project-b/
+│       └── conversations/    # Project conversations - ISOLATED
+├── folder_registry.json      # Maps folders to container names
+├── named_sessions.json       # Maps session names to conversation IDs
+├── last_session              # Last used container name
+└── Dockerfile                # Generated during build
+```

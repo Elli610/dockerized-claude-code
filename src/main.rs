@@ -457,14 +457,15 @@ enum SessionAction {
 }
 
 fn get_dockerfile_content() -> &'static str {
-    r#"FROM debian:bookworm-slim
+    r#"FROM ubuntu:24.04
 
 ENV HOME=/home/claude
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV TERM=xterm-256color
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# Install system dependencies including Docker
 RUN apt-get update && apt-get install -y \
     curl \
     git \
@@ -473,10 +474,17 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     xz-utils \
+    iptables \
+    supervisor \
+    libonig-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Docker (for Docker-in-Docker)
+RUN curl -fsSL https://get.docker.com | sh
 
 # Create user and directories
 RUN useradd -m -s /bin/bash -d /home/claude claude && \
+    usermod -aG docker claude && \
     mkdir -p /home/claude/workspace /home/claude/.claude /home/claude/.config /home/claude/.local/bin && \
     touch /home/claude/.claude.json /home/claude/.claude.json.backup && \
     chown -R claude:claude /home/claude
@@ -492,6 +500,10 @@ ENV NVM_DIR=/home/claude/.nvm
 
 # Install rustup and Rust (stable toolchain)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+
+# Install ck (code search tool)
+RUN cargo install ck-search && \
+    ln -sf /home/claude/.cargo/bin/ck /home/claude/.local/bin/ck
 
 # Install Foundry (forge, cast, anvil)
 RUN curl -L https://foundry.paradigm.xyz | bash && \
@@ -519,11 +531,36 @@ RUN echo 'export PATH=\"/home/claude/.local/bin:/home/claude/.cargo/bin:/home/cl
 # Verify installations
 RUN cargo --version && rustc --version && \
     forge --version && \
-    node --version && npm --version
+    node --version && npm --version && \
+    ck --version
 
+# Create entrypoint script to start Docker daemon
+USER root
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Start Docker daemon in background\n\
+dockerd > /var/log/dockerd.log 2>&1 &\n\
+\n\
+# Wait for Docker to be ready\n\
+timeout=30\n\
+while ! docker info > /dev/null 2>&1; do\n\
+    timeout=$((timeout - 1))\n\
+    if [ $timeout -le 0 ]; then\n\
+        echo "Docker daemon failed to start"\n\
+        exit 1\n\
+    fi\n\
+    sleep 1\n\
+done\n\
+\n\
+# Keep container running\n\
+exec tail -f /dev/null\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+USER claude
 WORKDIR /home/claude/workspace
 
-CMD ["tail", "-f", "/dev/null"]
+CMD ["/entrypoint.sh"]
 "#
 }
 
@@ -625,6 +662,7 @@ async fn start_container(
     let mut args = vec![
         "run".to_string(),
         "-d".to_string(),
+        "--privileged".to_string(),
         "--name".to_string(),
         name.to_string(),
     ];
@@ -1227,11 +1265,7 @@ async fn stop_all_containers() -> Result<()> {
             .await;
     }
 
-    println!(
-        "{} Removed {} container(s)",
-        "✓".green(),
-        containers.len()
-    );
+    println!("{} Removed {} container(s)", "✓".green(), containers.len());
     Ok(())
 }
 

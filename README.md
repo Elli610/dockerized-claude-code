@@ -203,19 +203,41 @@ Claude Sandbox uses a hybrid approach for state:
 - `.config/` - Application configuration
 
 **Isolated per-container** (in `~/.claude-sandbox/containers/<name>/`):
-- `conversations/` - Project-specific conversation history
+- `conversations/` - Project-specific conversation history. The host
+  `conversations/` directory is mounted into the container at
+  `/home/claude/.claude/projects`, which is where Claude Code stores its
+  per-project conversation `.jsonl` files.
 
 This means your API key, theme, and settings are shared across all containers, but each project has its own separate conversation history.
 
 ## Installed Tools in Container
 
+Languages and toolchains:
+
 | Tool | Description |
 |------|-------------|
 | **Rust** | Latest stable via rustup, includes rustfmt and clippy |
-| **Node.js** | LTS version via nvm |
-| **Foundry** | forge, cast, anvil, chisel for Solidity development |
-| **Git** | Version control |
+| **Node.js** | Latest via nvm, with `node`/`npm`/`npx` on PATH |
+| **Foundry** | `forge`, `cast`, `anvil`, `chisel` for Solidity development |
+| **Python 3** | Interpreter + `pip`, `venv`, plus `numpy`, `pandas`, `requests` preinstalled |
 | **Claude Code** | The AI coding assistant |
+
+Command-line utilities (chosen to make Claude faster and reduce permission prompts):
+
+| Tool | Why |
+|------|-----|
+| `git`, `gh` | Version control and GitHub CLI |
+| `ripgrep` (`rg`), `fd` | Fast search and file-finding (faster than `grep`/`find`) |
+| `jq` | JSON processing |
+| `bat`, `tree`, `less`, `vim`, `htop` | Inspection and navigation |
+| `curl`, `wget` | HTTP fetching |
+| `sudo` | Passwordless for the `claude` user, so additional tools can be installed at runtime |
+| `build-essential`, `pkg-config`, `libssl-dev`, `xz-utils`, `gnupg` | Build/link prerequisites |
+
+Preconfigured Claude state baked into the image:
+
+- **`context7` MCP server** preinstalled in `~/.claude.json` (launched via `npx -y @upstash/context7-mcp@latest` on first use).
+- **Default permission allowlist** in `~/.claude/settings.json` pre-allowing common read-only commands (`ls`, `cat`, `rg`, `fd`, `tree`, `bat`, `jq`, `git status`/`diff`/`log`/`branch`/`show`, `gh pr view`/`list`, version queries, etc.) so Claude does not prompt for every routine call.
 
 ## Configuration
 
@@ -234,9 +256,9 @@ This means your API key, theme, and settings are shared across all containers, b
 ├── .config/                  # App configuration - SHARED
 ├── containers/
 │   ├── claude-project-a/
-│   │   └── conversations/    # Project conversations - ISOLATED
+│   │   └── conversations/    # Mounted to /home/claude/.claude/projects in container - ISOLATED
 │   └── claude-project-b/
-│       └── conversations/    # Project conversations - ISOLATED
+│       └── conversations/    # Mounted to /home/claude/.claude/projects in container - ISOLATED
 ├── folder_registry.json      # Maps folders to container names
 ├── named_sessions.json       # Maps session names to conversation IDs
 ├── last_session              # Last used container name

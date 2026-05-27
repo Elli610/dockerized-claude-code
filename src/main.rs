@@ -457,28 +457,121 @@ enum SessionAction {
 }
 
 fn get_dockerfile_content() -> &'static str {
-    r#"FROM debian:bookworm-slim
+    r#"# syntax=docker/dockerfile:1.7
+FROM debian:bookworm-slim
 
 ENV HOME=/home/claude
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV TERM=xterm-256color
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# System dependencies (with BuildKit apt cache mounts for fast rebuilds).
+# Includes search/QoL tools Claude uses constantly: ripgrep, fd, tree, bat, vim, less, jq.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    wget \
     git \
     ca-certificates \
+    sudo \
+    gnupg \
     build-essential \
     pkg-config \
     libssl-dev \
     xz-utils \
-    && rm -rf /var/lib/apt/lists/*
+    jq \
+    ripgrep \
+    fd-find \
+    tree \
+    bat \
+    less \
+    vim \
+    htop \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-numpy \
+    python3-pandas \
+    python3-requests \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && ln -sf /usr/bin/batcat /usr/local/bin/bat
 
-# Create user and directories
+# GitHub CLI (gh) from official repo
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    mkdir -p -m 755 /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && apt-get install -y --no-install-recommends gh
+
+# Create user and directories. Grant passwordless sudo so Claude can install
+# additional tools at runtime without leaving the container.
 RUN useradd -m -s /bin/bash -d /home/claude claude && \
     mkdir -p /home/claude/workspace /home/claude/.claude /home/claude/.config /home/claude/.local/bin && \
-    touch /home/claude/.claude.json /home/claude/.claude.json.backup && \
+    echo 'claude ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/claude && \
+    chmod 440 /etc/sudoers.d/claude
+
+# Default Claude config: preinstall context7 MCP server and pre-allow common
+# read-only commands so Claude doesn't prompt for every routine call.
+RUN cat > /home/claude/.claude.json <<'JSON'
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    }
+  }
+}
+JSON
+
+RUN cat > /home/claude/.claude/settings.json <<'JSON'
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(pwd)",
+      "Bash(echo:*)",
+      "Bash(rg:*)",
+      "Bash(fd:*)",
+      "Bash(tree:*)",
+      "Bash(bat:*)",
+      "Bash(jq:*)",
+      "Bash(wc:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(file:*)",
+      "Bash(which:*)",
+      "Bash(env)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(git remote:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh repo view:*)",
+      "Bash(python3 --version)",
+      "Bash(node --version)",
+      "Bash(npm --version)",
+      "Bash(cargo --version)",
+      "Bash(rustc --version)",
+      "Bash(forge --version)"
+    ]
+  }
+}
+JSON
+
+RUN echo '{}' > /home/claude/.claude.json.backup && \
     chown -R claude:claude /home/claude
 
 USER claude
@@ -497,8 +590,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 RUN curl -L https://foundry.paradigm.xyz | bash && \
     /home/claude/.foundry/bin/foundryup
 
-# Install nvm and latest Node.js
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && \
+# Install nvm and latest Node.js (npm cache mount speeds up reinstalls)
+RUN --mount=type=cache,target=/home/claude/.npm,uid=1000,gid=1000 \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && \
     bash -c "source $NVM_DIR/nvm.sh && nvm install node"
 
 # Create symlinks for node/npm/npx to be accessible without sourcing nvm
@@ -507,19 +601,27 @@ RUN bash -c "source $NVM_DIR/nvm.sh && \
     ln -sf \$(which npm) /home/claude/.local/bin/npm && \
     ln -sf \$(which npx) /home/claude/.local/bin/npx"
 
-# Install claude-code globally and create symlink
-RUN bash -c "source $NVM_DIR/nvm.sh && npm install -g @anthropic-ai/claude-code" && \
-    bash -c "source $NVM_DIR/nvm.sh && ln -sf \$(which claude) /home/claude/.local/bin/claude"
+# Install claude-code via official installer
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Setup bashrc for interactive shells
 RUN echo 'export PATH=\"/home/claude/.local/bin:/home/claude/.cargo/bin:/home/claude/.foundry/bin:\$PATH\"' >> /home/claude/.bashrc && \
     echo 'export NVM_DIR=\"\$HOME/.nvm\"' >> /home/claude/.bashrc && \
     echo '[ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"' >> /home/claude/.bashrc
 
-# Verify installations
+# Verify all installations (fails the build if any tool is missing)
 RUN cargo --version && rustc --version && \
     forge --version && \
-    node --version && npm --version
+    node --version && npm --version && \
+    rg --version | head -1 && \
+    fd --version && \
+    bat --version | head -1 && \
+    tree --version | head -1 && \
+    jq --version && \
+    gh --version | head -1 && \
+    python3 --version && \
+    pip3 --version && \
+    sudo -n true
 
 WORKDIR /home/claude/workspace
 
@@ -589,6 +691,8 @@ async fn build_image(no_cache: bool) -> Result<()> {
     let dockerfile_path = config_dir.join("Dockerfile");
     std::fs::write(&dockerfile_path, get_dockerfile_content())?;
     let mut cmd = Command::new("docker");
+    // BuildKit is required for `# syntax=` and `RUN --mount=type=cache` in the Dockerfile.
+    cmd.env("DOCKER_BUILDKIT", "1");
     cmd.args(["build", "-t", IMAGE_NAME]);
     if no_cache {
         cmd.arg("--no-cache");

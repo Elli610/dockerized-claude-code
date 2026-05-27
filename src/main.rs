@@ -373,7 +373,7 @@ fn resolve_target_to_container(target: Option<&str>) -> Result<String> {
             }
 
             // Check if it looks like a container name (starts with prefix)
-            if t.starts_with(CONTAINER_PREFIX) || t.starts_with("claude") {
+            if t.starts_with(CONTAINER_PREFIX) {
                 return Ok(t.to_string());
             }
 
@@ -828,7 +828,7 @@ async fn start_container(
     Ok(())
 }
 
-async fn exec_claude_interactive(
+fn exec_claude_interactive(
     name: &str,
     prompt: Option<&str>,
     dangerously_skip_permissions: bool,
@@ -858,16 +858,12 @@ async fn exec_claude_interactive(
     }
 
     // Use std::process::Command for proper TTY handling
-    let status = std::process::Command::new("docker")
+    std::process::Command::new("docker")
         .args(&args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()?;
-
-    if !status.success() && status.code() != Some(0) {
-        // Claude exited, which is fine
-    }
 
     Ok(())
 }
@@ -1128,8 +1124,7 @@ async fn run_claude(mut config: RunConfig) -> Result<()> {
         config.dangerously_skip_permissions,
         config.continue_session,
         config.resume.as_deref(),
-    )
-    .await?;
+    )?;
 
     // If this was a named session, detect and save the conversation ID
     if let Some(ref session_name) = config.session_name {
@@ -1204,7 +1199,7 @@ async fn continue_session_cmd(container: &str, session_name: Option<&str>) -> Re
             .cyan()
         );
 
-        exec_claude_interactive(container, None, false, false, Some(&conversation_id)).await?;
+        exec_claude_interactive(container, None, false, false, Some(&conversation_id))?;
 
         println!("\n{} Exited session '{}'", "✓".green(), name);
     } else {
@@ -1213,7 +1208,7 @@ async fn continue_session_cmd(container: &str, session_name: Option<&str>) -> Re
             format!("Continuing last conversation in container '{container}'...").cyan()
         );
 
-        exec_claude_interactive(container, None, false, true, None).await?;
+        exec_claude_interactive(container, None, false, true, None)?;
 
         println!("\n{} Exited Claude session", "✓".green());
     }
@@ -1246,7 +1241,7 @@ async fn resume_session_cmd(container: &str, conversation: Option<&str>) -> Resu
     }
 
     // If no conversation specified, claude -r will show interactive picker
-    exec_claude_interactive(container, None, false, false, conversation.or(Some(""))).await?;
+    exec_claude_interactive(container, None, false, false, conversation.or(Some("")))?;
 
     println!("\n{} Exited Claude session", "✓".green());
     println!("  Container '{container}' is still running");
@@ -1334,11 +1329,7 @@ async fn stop_all_containers() -> Result<()> {
             .await;
     }
 
-    println!(
-        "{} Removed {} container(s)",
-        "✓".green(),
-        containers.len()
-    );
+    println!("{} Removed {} container(s)", "✓".green(), containers.len());
     Ok(())
 }
 
@@ -1404,7 +1395,7 @@ async fn list_sessions() -> Result<()> {
     Ok(())
 }
 
-async fn reset_state(force: bool) -> Result<()> {
+fn reset_state(force: bool) -> Result<()> {
     let config_dir = get_config_dir()?;
     if !force {
         println!(
@@ -1517,7 +1508,7 @@ async fn main() -> Result<()> {
         }
         Commands::List => list_sessions().await,
         Commands::Build { no_cache } => build_image(no_cache).await,
-        Commands::Reset { force } => reset_state(force).await,
+        Commands::Reset { force } => reset_state(force),
         Commands::Status { target } => {
             let container_name = resolve_target_to_container(target.as_deref())?;
             status_container(&container_name).await

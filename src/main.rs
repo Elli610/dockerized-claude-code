@@ -432,12 +432,15 @@ fn get_named_session(name: &str) -> Result<Option<String>> {
     Ok(registry.sessions.get(name).cloned())
 }
 
-/// Detect the most recent conversation ID by looking at .claude directory
+/// Detect the most recent conversation ID by inspecting the projects directory.
+/// Claude Code stores conversations as `<uuid>.jsonl` files under
+/// `/home/claude/.claude/projects/<encoded-path>/`. We pick the most recently
+/// modified file and return its basename without the `.jsonl` suffix.
 async fn detect_latest_conversation_id(container: &str) -> Result<Option<String>> {
     let output = Command::new("docker")
         .args([
             "exec", container, "bash", "-c",
-            "find /home/claude/.claude -name 'conversations' -type d 2>/dev/null | head -1 | xargs -I{} find {} -maxdepth 1 -type d 2>/dev/null | tail -n +2 | xargs -I{} stat --format='%Y %n' {} 2>/dev/null | sort -rn | head -1 | awk '{print $2}' | xargs -I{} basename {}"
+            "find /home/claude/.claude/projects -name '*.jsonl' -type f -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -1 | awk '{print $2}' | xargs -I{} basename {} .jsonl"
         ])
         .output()
         .await?;

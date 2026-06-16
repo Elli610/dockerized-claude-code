@@ -1,6 +1,6 @@
 [package]
 name = "claude-sandbox"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Run Claude Code in an isolated Docker container"
 authors = ["Elli"]

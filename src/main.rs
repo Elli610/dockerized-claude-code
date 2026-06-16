@@ -13,6 +13,35 @@ const IMAGE_NAME: &str = "claude-code-sandbox";
 const DEFAULT_SESSION: &str = "claude";
 const CONTAINER_PREFIX: &str = "claude";
 
+/// Official Anthropic plugin marketplace.
+const PLUGIN_MARKETPLACE_NAME: &str = "claude-plugins-official";
+const PLUGIN_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
+
+/// Curated set of plugins from `claude-plugins-official` installed by default.
+/// General-purpose plugins plus LSP plugins for languages already present in
+/// the image (Rust, Python, Node/TypeScript). Skips niche/demo plugins and
+/// LSPs whose language server binaries aren't preinstalled.
+const DEFAULT_PLUGINS: &[&str] = &[
+    "frontend-design",
+    "code-review",
+    "code-simplifier",
+    "code-modernization",
+    "commit-commands",
+    "feature-dev",
+    "pr-review-toolkit",
+    "plugin-dev",
+    "skill-creator",
+    "claude-md-management",
+    "security-guidance",
+    "session-report",
+    "hookify",
+    "mcp-server-dev",
+    "agent-sdk-dev",
+    "rust-analyzer-lsp",
+    "pyright-lsp",
+    "typescript-lsp",
+];
+
 #[derive(Parser)]
 #[command(name = "claude-sandbox")]
 #[command(about = "Run Claude Code in an isolated Docker container")]
@@ -453,14 +482,56 @@ async fn detect_latest_conversation_id(container: &str) -> Result<Option<String>
     }
 }
 
+/// Seed the (bind-mounted) host `.claude` directory with defaults baked into
+/// the image. The main container mounts the host directory over
+/// `/home/claude/.claude`, which shadows the image's pre-installed plugins;
+/// this one-shot copy populates the host directory before that mount takes
+/// effect. `cp -rn` (no-clobber) ensures existing user state is never
+/// overwritten on subsequent runs.
+async fn seed_image_defaults(global_claude_dir: &std::path::Path) -> Result<()> {
+    // Skip if the host dir already contains a plugins/ subdirectory.
+    if global_claude_dir.join("plugins").exists() {
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        "Seeding default plugins from image into host state dir (first run)...".cyan()
+    );
+
+    let mount_spec = format!("{}:/seed-target", global_claude_dir.display());
+    let output = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &mount_spec,
+            IMAGE_NAME,
+            "bash",
+            "-c",
+            "cp -rn /home/claude/.claude/. /seed-target/",
+        ])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        eprintln!(
+            "{} Seed step failed (continuing): {}",
+            "⚠".yellow(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SessionAction {
     NewSession,
     Continue,
 }
 
-fn get_dockerfile_content() -> &'static str {
-    r#"# syntax=docker/dockerfile:1.7
+fn get_dockerfile_content() -> String {
+    let template = r#"# syntax=docker/dockerfile:1.7
 FROM debian:bookworm-slim
 
 ENV HOME=/home/claude
@@ -607,6 +678,13 @@ RUN bash -c "source $NVM_DIR/nvm.sh && \
 # Install claude-code via official installer
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
+# Pre-install the official Anthropic plugin marketplace and a curated plugin
+# set. These commands write to /home/claude/.claude/, which is later seeded
+# into the bind-mounted host state dir on first container start. Failures
+# (e.g. claude CLI requires auth) are logged but do not fail the build,
+# so the image is still usable without plugins.
+__PLUGIN_INSTALL_BLOCK__
+
 # Setup bashrc for interactive shells
 RUN echo 'export PATH=\"/home/claude/.local/bin:/home/claude/.cargo/bin:/home/claude/.foundry/bin:\$PATH\"' >> /home/claude/.bashrc && \
     echo 'export NVM_DIR=\"\$HOME/.nvm\"' >> /home/claude/.bashrc && \
@@ -629,7 +707,20 @@ RUN cargo --version && rustc --version && \
 WORKDIR /home/claude/workspace
 
 CMD ["tail", "-f", "/dev/null"]
-"#
+"#;
+
+    let plugin_list = DEFAULT_PLUGINS.join(" ");
+    let plugin_block = format!(
+        "RUN (claude plugin marketplace add {source} && \\\n     \
+         for p in {list}; do \\\n         \
+         claude plugin install \"${{p}}@{name}\" || \\\n             \
+         echo \"WARN: plugin install failed: ${{p}}\"; \\\n     \
+         done) || echo \"WARN: plugin pre-install skipped (marketplace add failed)\"",
+        source = PLUGIN_MARKETPLACE_SOURCE,
+        list = plugin_list,
+        name = PLUGIN_MARKETPLACE_NAME,
+    );
+    template.replace("__PLUGIN_INSTALL_BLOCK__", &plugin_block)
 }
 
 /// Resolve a folder path to an absolute path and extract the folder name
@@ -747,6 +838,12 @@ async fn start_container(
     // Mount global .claude directory (for auth, settings, etc.)
     let global_claude_dir = global_config_dir.join(".claude");
     std::fs::create_dir_all(&global_claude_dir)?;
+
+    // Seed image-baked defaults (e.g. pre-installed plugins) into the host
+    // dir before the main container's bind mount shadows them. No-op once
+    // the host dir is populated.
+    seed_image_defaults(&global_claude_dir).await?;
+
     args.extend([
         "-v".to_string(),
         format!("{}:/home/claude/.claude", global_claude_dir.display()),

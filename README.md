@@ -239,6 +239,37 @@ Preconfigured Claude state baked into the image:
 - **`context7` MCP server** preinstalled in `~/.claude.json` (launched via `npx -y @upstash/context7-mcp@latest` on first use).
 - **Default permission allowlist** in `~/.claude/settings.json` pre-allowing common read-only commands (`ls`, `cat`, `rg`, `fd`, `tree`, `bat`, `jq`, `git status`/`diff`/`log`/`branch`/`show`, `gh pr view`/`list`, version queries, etc.) so Claude does not prompt for every routine call.
 
+## Default plugins
+
+The Docker image is built with a curated set of plugins from the official
+Anthropic marketplace (`anthropics/claude-plugins-official`) pre-installed
+into `/home/claude/.claude/`. Because the running container bind-mounts the
+host's `~/.claude-sandbox/.claude/` over that path (so credentials and
+settings persist across containers), the image-baked plugins are seeded
+into the host directory the first time you `run` a session — a one-shot
+`docker run --rm` does a `cp -rn` (no-clobber) so any state you already
+have is preserved. After seeding, plugins live in the host directory and
+are shared across every container that uses the same global config dir.
+
+Installed by default:
+
+- General-purpose: `frontend-design`, `code-review`, `code-simplifier`,
+  `code-modernization`, `commit-commands`, `feature-dev`, `pr-review-toolkit`,
+  `plugin-dev`, `skill-creator`, `claude-md-management`, `security-guidance`,
+  `session-report`, `hookify`, `mcp-server-dev`, `agent-sdk-dev`
+- LSP plugins matching the toolchains in the image: `rust-analyzer-lsp`,
+  `pyright-lsp`, `typescript-lsp`
+
+To customise the set, edit `DEFAULT_PLUGINS` in `src/main.rs` and
+`claude-sandbox build --no-cache`. To reset plugin state, delete
+`~/.claude-sandbox/.claude/plugins/` and re-run `claude-sandbox run` — the
+seed step will re-populate it from the image on the next invocation.
+
+If the `claude plugin install` step fails during image build (for example
+if the CLI requires authentication or has no network access at build time),
+the build still succeeds with warning messages and the image is usable
+without plugins.
+
 ## Configuration
 
 | Environment Variable | Description |

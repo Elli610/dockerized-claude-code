@@ -675,8 +675,11 @@ RUN bash -c "source $NVM_DIR/nvm.sh && \
     ln -sf \$(which npm) /home/claude/.local/bin/npm && \
     ln -sf \$(which npx) /home/claude/.local/bin/npx"
 
-# Install claude-code via official installer
-RUN curl -fsSL https://claude.ai/install.sh | bash
+# Install claude-code via official installer. Pin to `latest` so each image
+# rebuild pulls the newest release (otherwise Docker caches this layer and
+# freezes an old CLI, which eventually blocks newer models — e.g. 2.1.152
+# refuses claude-opus-5-5).
+RUN curl -fsSL https://claude.ai/install.sh | bash -s latest
 
 # Pre-install the official Anthropic plugin marketplace and a curated plugin
 # set. These commands write to /home/claude/.claude/, which is later seeded
